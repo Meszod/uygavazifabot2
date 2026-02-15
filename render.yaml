@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: homework-bot
+    env: python
+    
+    # IMPORTANT: Web service emas, background worker
+    plan: free
+    
+    # Port open qilmaslik (web emas, long polling)
+    healthCheckPath: 
+    
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main_fixed.py
