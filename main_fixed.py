@@ -54,10 +54,22 @@ sqlite3.register_converter("DATE", convert_date)
 # ==================== BOT KONFIGURATSIYASI ====================
 BOT_TOKEN = '8523430941:AAGtv-UXLK_qDA-83YpdEMW-WZbPvH-RJU0'
 CHANNEL_ID = '-1003543686638'
-ADMIN_ID = 8517530604
+
+# ADMINLAR RO'YXATI - qo'shimcha admin ID larini qo'shing
+ADMIN_IDS = [
+    8517530604,  # Asosiy admin
+    # 123456789,  # Qo'shimcha admin 1 (izohdagi # ni olib tashlang)
+    # 987654321,  # Qo'shimcha admin 2
+]
+
 DB_NAME = 'students.db'
 GROQ_API_KEY = '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'
 GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
+
+# Yordamchi funksiya - admin tekshirish
+def is_admin(user_id):
+    """Foydalanuvchi admin ekanligini tekshirish"""
+    return user_id in ADMIN_IDS
 
 # ==================== GLOBAL O'ZGARUVCHILAR ====================
 active_contest = None
@@ -498,7 +510,7 @@ def broadcast_assignment(assignment_text, assignment_id, assignment_date):
     sent_count = 0
     
     for student in students:
-        if student['user_id'] != ADMIN_ID:
+        if not is_admin(student['user_id']):
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
             markup.add(types.KeyboardButton('📝 Ushbu vazifani topshirish'))
             
@@ -534,7 +546,7 @@ def register_handlers(bot_instance):
         logger.info(f"▶️ /start - User: {user_id}")
         
         # Admin auto-register
-        if user_id == ADMIN_ID:
+        if is_admin(user_id):
             if not is_registered(user_id):
                 full_name = f"{first_name} {last_name}".strip()
                 safe_db_execute(
@@ -574,7 +586,7 @@ def register_handlers(bot_instance):
     def help_command(message):
         user_id = message.from_user.id
         
-        if user_id == ADMIN_ID:
+        if is_admin(user_id):
             help_text = """👨‍💼 <b>Admin Panel - Yordam</b>
 
 📤 <b>Uyga vazifa yuborish:</b> Barcha o'quvchilarga vazifa yuborish
@@ -604,7 +616,7 @@ def register_handlers(bot_instance):
     def register_start(message):
         user_id = message.from_user.id
         
-        if user_id == ADMIN_ID or is_registered(user_id):
+        if is_admin(user_id) or is_registered(user_id):
             safe_send_message(message.chat.id, "✅ Siz allaqachon ro'yxatdan o'tgansiz!")
             return
         
@@ -711,7 +723,7 @@ def register_handlers(bot_instance):
         safe_send_message(message.chat.id, stats_text, parse_mode='HTML')
     
     # Broadcast - Admin
-    @bot.message_handler(func=lambda m: m.text == '📤 Uyga vazifa yuborish' and m.from_user.id == ADMIN_ID)
+    @bot.message_handler(func=lambda m: m.text == '📤 Uyga vazifa yuborish' and is_admin(m.from_user.id))
     def broadcast_start(message):
         user_id = message.from_user.id
         user_states[user_id] = 'broadcasting_homework'
@@ -947,7 +959,7 @@ def register_handlers(bot_instance):
     def handle_inline_buttons(call):
         user_id = call.from_user.id
         
-        if user_id != ADMIN_ID:
+        if not is_admin(user_id):
             safe_answer_callback_query(call.id, "❌ Ruxsat yo'q!", show_alert=True)
             return
         
@@ -1107,7 +1119,7 @@ def register_handlers(bot_instance):
         user_id = message.from_user.id
         clear_user_state(user_id)
         
-        keyboard = get_admin_keyboard() if user_id == ADMIN_ID else get_main_keyboard()
+        keyboard = get_admin_keyboard() if is_admin(user_id) else get_main_keyboard()
         safe_send_message(message.chat.id, "❌ Operatsiya bekor qilindi.", reply_markup=keyboard)
     
     logger.info("✅ Barcha handlerlar ro'yxatdan o'tdi")
