@@ -1122,6 +1122,489 @@ def register_handlers(bot_instance):
         keyboard = get_admin_keyboard() if is_admin(user_id) else get_main_keyboard()
         safe_send_message(message.chat.id, "❌ Operatsiya bekor qilindi.", reply_markup=keyboard)
     
+    # ==================== CONTEST HANDLERS ====================
+    @bot.message_handler(func=lambda m: m.text == '🏆 IT Misol' and is_admin(m.from_user.id))
+    def start_contest_admin(message):
+        """Admin: Yangi IT misol yaratish"""
+        user_id = message.from_user.id
+        user_states[user_id] = 'creating_contest_problem'
+        
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton('❌ Bekor qilish'))
+        
+        safe_send_message(
+            message.chat.id,
+            "🏆 <b>IT Misol musobaqasi yaratish</b>\n\n"
+            "1️⃣ Misol matnini kiriting:\n\n"
+            "Masalan:\n<code>2 + 2 * 3 = ?</code>",
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+    
+    @bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id] == 'creating_contest_problem')
+    def create_contest_problem(message):
+        """Misol savolini saqlash"""
+        user_id = message.from_user.id
+        problem_text = message.text.strip()
+        
+        if problem_text == '❌ Bekor qilish':
+            clear_user_state(user_id)
+            safe_send_message(message.chat.id, "❌ Bekor qilindi.", reply_markup=get_admin_keyboard())
+            return
+        
+        if len(problem_text) < 5:
+            safe_send_message(message.chat.id, "❌ Juda qisqa!")
+            return
+        
+        user_states[user_id] = f'creating_contest_answer_{problem_text}'
+        safe_send_message(
+            message.chat.id,
+            "✅ Misol saqlandi!\n\n2️⃣ To'g'ri javobni kiriting:\n\nMasalan: <code>8</code>",
+            parse_mode='HTML'
+        )
+    
+    @bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id].startswith('creating_contest_answer_'))
+    def create_contest_answer(message):
+        """To'g'ri javobni saqlash"""
+        user_id = message.from_user.id
+        correct_answer = message.text.strip()
+        problem_text = user_states[user_id].replace('creating_contest_answer_', '')
+        
+        user_states[user_id] = f'creating_contest_deadline_{problem_text}|||{correct_answer}'
+        
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+        markup.add(
+            types.KeyboardButton('⏱ 5 daqiqa'),
+            types.KeyboardButton('⏱ 10 daqiqa'),
+            types.KeyboardButton('⏱ 15 daqiqa'),
+            types.KeyboardButton('⏱ 30 daqiqa'),
+            types.KeyboardButton('⏱ 1 soat'),
+            types.KeyboardButton('❌ Bekor qilish')
+        )
+        
+        safe_send_message(
+            message.chat.id,
+            "✅ Javob saqlandi!\n\n3️⃣ Muddat tanlang:",
+            reply_markup=markup
+        )
+    
+    @bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id].startswith('creating_contest_deadline_'))
+    def create_contest_deadline(message):
+        """Deadline belgilab musobaqani boshlash"""
+        global active_contest
+        user_id = message.from_user.id
+        
+        if message.text == '❌ Bekor qilish':
+            clear_user_state(user_id)
+            safe_send_message(message.chat.id, "❌ Bekor qilindi.", reply_markup=get_admin_keyboard())
+            return
+        
+        data = user_states[user_id].replace('creating_contest_deadline_', '')
+        problem_text, correct_answer = data.split('|||')
+        
+        minutes = 0
+        if '5 daqiqa' in message.text:
+            minutes = 5
+        elif '10 daqiqa' in message.text:
+            minutes = 10
+        elif '15 daqiqa' in message.text:
+            minutes = 15
+        elif '30 daqiqa' in message.text:
+            minutes = 30
+        elif '1 soat' in message.text:
+            minutes = 60
+        else:
+            safe_send_message(message.chat.id, "❌ Noto'g'ri tanlov!")
+            return
+        
+        deadline = datetime.now() + timedelta(minutes=minutes)
+        
+        # Contest yaratish
+        contest_id = safe_db_execute(
+            'INSERT INTO contests (problem_text, correct_answer, deadline) VALUES (?, ?, ?)',
+            (problem_text, correct_answer, deadline),
+            commit=True
+        )
+        
+        if not contest_id:
+            safe_send_message(message.chat.id, "❌ Xatolik!")
+            return
+        
+        active_contest = contest_id
+        
+        # Barcha o'quvchilarga yuborish
+        students = get_all_students()
+        sent_count = 0
+        for student in students:
+            if not is_admin(student['user_id']):
+                markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+                markup.add(types.KeyboardButton('✍️ Javob yuborish'))
+                
+                success = safe_send_message(
+                    student['user_id'],
+                    f"🏆 <b>YANGI IT MISOL!</b>\n\n❓ Misol:\n{escape_html(problem_text)}\n\n"
+                    f"⏱ Muddat: {minutes} daqiqa ({deadline.strftime('%H:%M')} gacha)\n"
+                    f"🏁 Birinchi to'g'ri javob g'olib!\n\n🔢 Contest ID: #{contest_id}",
+                    parse_mode='HTML',
+                    reply_markup=markup
+                )
+                if success:
+                    sent_count += 1
+        
+        clear_user_state(user_id)
+        safe_send_message(
+            message.chat.id,
+            f"✅ Contest boshlandi!\n\n🏆 ID: #{contest_id}\n❓ Misol: {problem_text[:50]}...\n"
+            f"✅ Javob: {correct_answer}\n⏱ Muddat: {minutes} daqiqa\n📢 Yuborildi: {sent_count} ta o'quvchi",
+            reply_markup=get_admin_keyboard()
+        )
+        
+        logger.info(f"✅ Contest yaratildi: #{contest_id}")
+    
+    @bot.message_handler(func=lambda m: m.text == '✍️ Javob yuborish')
+    def submit_contest_answer_start(message):
+        """O'quvchi: Contest javobini yuborish"""
+        global active_contest
+        user_id = message.from_user.id
+        
+        if not active_contest:
+            safe_send_message(message.chat.id, "❌ Faol musobaqa yo'q!")
+            return
+        
+        contest = safe_db_execute(
+            'SELECT * FROM contests WHERE id = ? AND is_active = 1',
+            (active_contest,),
+            fetch_one=True
+        )
+        
+        if not contest:
+            safe_send_message(message.chat.id, "❌ Musobaqa yakunlangan!")
+            return
+        
+        deadline = contest['deadline']
+        if datetime.now() > deadline:
+            safe_send_message(message.chat.id, "⏰ Muddat tugagan!")
+            return
+        
+        user_states[user_id] = f'submitting_contest_{active_contest}'
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton('❌ Bekor qilish'))
+        
+        minutes_left = int((deadline - datetime.now()).total_seconds() / 60)
+        safe_send_message(
+            message.chat.id,
+            f"✍️ Javobingizni yuboring:\n\n❓ Misol:\n{escape_html(contest['problem_text'])}\n\n"
+            f"⏱ Qolgan vaqt: {minutes_left} daqiqa",
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+    
+    @bot.message_handler(func=lambda m: m.from_user.id in user_states and user_states[m.from_user.id].startswith('submitting_contest_'))
+    def submit_contest_answer(message):
+        """Contest javobini tekshirish"""
+        user_id = message.from_user.id
+        contest_id = int(user_states[user_id].split('_')[-1])
+        answer = message.text.strip()
+        
+        if answer == '❌ Bekor qilish':
+            clear_user_state(user_id)
+            safe_send_message(message.chat.id, "❌ Bekor qilindi.", reply_markup=get_main_keyboard())
+            return
+        
+        student = get_student_info(user_id)
+        contest = safe_db_execute(
+            'SELECT * FROM contests WHERE id = ?',
+            (contest_id,),
+            fetch_one=True
+        )
+        
+        if not contest:
+            safe_send_message(message.chat.id, "❌ Contest topilmadi!")
+            return
+        
+        correct_answer = contest['correct_answer'].strip().lower()
+        deadline = contest['deadline']
+        
+        if datetime.now() > deadline:
+            safe_send_message(message.chat.id, "⏰ Muddat tugagan!")
+            clear_user_state(user_id)
+            return
+        
+        is_correct = (answer.lower() == correct_answer) or (SequenceMatcher(None, answer.lower(), correct_answer).ratio() > 0.85)
+        
+        # Rank hisoblash
+        rank_result = safe_db_execute(
+            'SELECT COUNT(*) as count FROM contest_submissions WHERE contest_id = ? AND is_correct = 1',
+            (contest_id,),
+            fetch_one=True
+        )
+        rank_position = rank_result['count'] + 1 if is_correct else None
+        
+        # Saqlash
+        safe_db_execute(
+            'INSERT INTO contest_submissions (contest_id, user_id, full_name, answer, is_correct, rank_position) VALUES (?, ?, ?, ?, ?, ?)',
+            (contest_id, user_id, student['full_name'], answer, 1 if is_correct else 0, rank_position),
+            commit=True
+        )
+        
+        clear_user_state(user_id)
+        
+        if is_correct:
+            emoji = "🥇" if rank_position == 1 else "🥈" if rank_position == 2 else "🥉" if rank_position == 3 else "🏅"
+            safe_send_message(
+                message.chat.id,
+                f"🎉 TABRIKLAYMIZ!\n\n✅ To'g'ri javob!\n{emoji} O'rin: {rank_position}\n"
+                f"📅 Vaqt: {datetime.now().strftime('%H:%M:%S')}\n\n👏 Ajoyib!",
+                reply_markup=get_main_keyboard()
+            )
+            
+            safe_send_message(
+                CHANNEL_ID,
+                f"🏆 <b>Contest #{contest_id} - To'g'ri javob!</b>\n\n"
+                f"{emoji} {rank_position}-o'rin: {escape_html(student['full_name'])}\n"
+                f"📅 Vaqt: {datetime.now().strftime('%H:%M:%S')}\n✅ Javob: {escape_html(answer)}",
+                parse_mode='HTML'
+            )
+        else:
+            minutes_left = int((deadline - datetime.now()).total_seconds() / 60)
+            safe_send_message(
+                message.chat.id,
+                f"❌ Noto'g'ri javob!\n\n💡 Qayta urinib ko'ring!\n⏱ Qolgan: {minutes_left} daqiqa",
+                reply_markup=get_main_keyboard()
+            )
+    
+    @bot.message_handler(func=lambda m: m.text == '🏆 Reyting')
+    def show_contest_leaderboard(message):
+        """Contest reyting jadvali"""
+        global active_contest
+        
+        if not active_contest:
+            safe_send_message(message.chat.id, "❌ Faol musobaqa yo'q!")
+            return
+        
+        results = safe_db_execute(
+            'SELECT full_name, submitted_at, rank_position FROM contest_submissions WHERE contest_id = ? AND is_correct = 1 ORDER BY rank_position ASC',
+            (active_contest,),
+            fetch_all=True
+        )
+        
+        contest = safe_db_execute(
+            'SELECT problem_text, deadline FROM contests WHERE id = ?',
+            (active_contest,),
+            fetch_one=True
+        )
+        
+        if not results:
+            text = f"🏆 <b>Reyting (Contest #{active_contest})</b>\n\n❌ Hozircha to'g'ri javob yo'q!"
+        else:
+            text = f"🏆 <b>Reyting (Contest #{active_contest})</b>\n\n"
+            text += f"❓ Misol: {escape_html(contest['problem_text'][:50])}...\n"
+            text += f"⏱ Muddat: {contest['deadline'].strftime('%H:%M')}\n\n"
+            
+            for res in results:
+                emoji = "🥇" if res['rank_position'] == 1 else "🥈" if res['rank_position'] == 2 else "🥉" if res['rank_position'] == 3 else "🏅"
+                text += f"{emoji} {res['rank_position']}-o'rin: {escape_html(res['full_name'])} ({res['submitted_at'].strftime('%H:%M:%S')})\n"
+        
+        safe_send_message(message.chat.id, text, parse_mode='HTML')
+    
+    # ==================== EXCEL EXPORT ====================
+    @bot.message_handler(func=lambda m: m.text == '📥 Excel' and is_admin(m.from_user.id))
+    def export_excel_handler(message):
+        """Excel export"""
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, Alignment, PatternFill
+            
+            submissions = safe_db_execute(
+                '''SELECT s.id, s.full_name, s.homework_text, s.submitted_at, s.status, 
+                   s.rejection_reason, a.homework_text as assignment_text, a.assignment_date
+                   FROM submissions s
+                   LEFT JOIN assignments a ON s.assignment_id = a.id
+                   ORDER BY s.submitted_at DESC''',
+                fetch_all=True
+            )
+            
+            if not submissions:
+                safe_send_message(message.chat.id, "❌ Hech qanday topshiriq yo'q!")
+                return
+            
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Topshiriqlar"
+            
+            headers = ['ID', 'Ism', 'Vazifa matni', 'Sana', 'Holat', 'Rad sababi', 'Berilgan vazifa', 'Vazifa sanasi']
+            ws.append(headers)
+            
+            for cell in ws[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                cell.alignment = Alignment(horizontal='center')
+            
+            for sub in submissions:
+                ws.append([
+                    sub['id'],
+                    sub['full_name'],
+                    sub['homework_text'][:100] if sub['homework_text'] else '',
+                    sub['submitted_at'].strftime('%d.%m.%Y %H:%M') if sub['submitted_at'] else '',
+                    '✅ Tasdiqlangan' if sub['status'] == 'approved' else '❌ Rad etilgan' if sub['status'] == 'rejected' else '⏳ Kutilmoqda',
+                    sub['rejection_reason'] or '',
+                    sub['assignment_text'][:50] if sub['assignment_text'] else '',
+                    sub['assignment_date'] if sub['assignment_date'] else ''
+                ])
+            
+            ws.column_dimensions['A'].width = 8
+            ws.column_dimensions['B'].width = 25
+            ws.column_dimensions['C'].width = 40
+            ws.column_dimensions['D'].width = 18
+            ws.column_dimensions['E'].width = 18
+            ws.column_dimensions['F'].width = 30
+            ws.column_dimensions['G'].width = 30
+            ws.column_dimensions['H'].width = 15
+            
+            filename = f'topshiriqlar_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+            wb.save(filename)
+            
+            with open(filename, 'rb') as file:
+                safe_send_document(message.chat.id, file, caption=f"📊 Barcha topshiriqlar ({len(submissions)} ta)")
+            
+            import os
+            os.remove(filename)
+            
+            logger.info(f"✅ Excel yuborildi: {filename}")
+            
+        except ImportError:
+            safe_send_message(message.chat.id, "❌ openpyxl kutubxonasi o'rnatilmagan!\n\npip install openpyxl")
+        except Exception as e:
+            logger.error(f"❌ Excel export xato: {e}")
+            safe_send_message(message.chat.id, f"❌ Xatolik: {str(e)}")
+    
+    # ==================== ADMIN PANEL ====================
+    @bot.message_handler(func=lambda m: m.text in ['👨‍💼 Admin panel', 'Admin panel'] and is_admin(m.from_user.id))
+    def admin_panel(message):
+        """Admin panel"""
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton('👥 O\'quvchilar ro\'yxati', callback_data='admin_students'),
+            types.InlineKeyboardButton('📊 Umumiy statistika', callback_data='admin_stats'),
+            types.InlineKeyboardButton('🗑️ Barchasini tozalash', callback_data='admin_clear')
+        )
+        
+        safe_send_message(
+            message.chat.id,
+            "👨‍💼 <b>Admin Panel</b>\n\nQuyidagi opsiyalardan birini tanlang:",
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
+    def handle_admin_callbacks(call):
+        """Admin inline callbacks"""
+        user_id = call.from_user.id
+        
+        if not is_admin(user_id):
+            safe_answer_callback_query(call.id, "❌ Ruxsat yo'q!")
+            return
+        
+        data = call.data
+        
+        if data == 'admin_students':
+            students = get_all_students()
+            if not students:
+                text = "👥 Ro'yxat bo'sh."
+            else:
+                text = "👥 <b>Faol o'quvchilar:</b>\n\n"
+                for i, s in enumerate(students, 1):
+                    username = f"@{s['username']}" if s['username'] else "Yo'q"
+                    text += f"{i}. {escape_html(s['full_name'])} ({username})\n"
+                    text += f"   📅 Ro'yxat: {s['registered_at'].strftime('%d.%m.%Y')}\n\n"
+            
+            safe_edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+            safe_answer_callback_query(call.id, "👥 Ro'yxat yuklandi!")
+        
+        elif data == 'admin_stats':
+            overall = safe_db_execute(
+                'SELECT SUM(total_submissions) as total, SUM(approved_submissions) as approved, SUM(rejected_submissions) as rejected FROM statistics',
+                fetch_one=True
+            )
+            
+            text = "📊 <b>Umumiy statistika</b>\n\n"
+            text += f"📈 Jami: {overall['total'] or 0}\n"
+            text += f"✅ Tasdiqlangan: {overall['approved'] or 0}\n"
+            text += f"❌ Rad etilgan: {overall['rejected'] or 0}\n\n"
+            
+            today = datetime.now().strftime('%Y-%m-%d')
+            today_stats = safe_db_execute(
+                'SELECT total_submissions, approved_submissions, rejected_submissions FROM statistics WHERE date = ?',
+                (today,),
+                fetch_one=True
+            )
+            
+            if today_stats:
+                text += f"📅 Bugun:\n"
+                text += f"• Topshirilgan: {today_stats['total_submissions'] or 0}\n"
+                text += f"• Tasdiqlangan: {today_stats['approved_submissions'] or 0}\n"
+                text += f"• Rad etilgan: {today_stats['rejected_submissions'] or 0}\n"
+            else:
+                text += "📅 Bugun: Hech narsa yo'q\n"
+            
+            safe_edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+            safe_answer_callback_query(call.id, "📊 Statistika yuklandi!")
+        
+        elif data == 'admin_clear':
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton('✅ Ha, tozalash', callback_data='confirm_clear'),
+                types.InlineKeyboardButton('❌ Bekor qilish', callback_data='cancel_clear')
+            )
+            
+            safe_edit_message_text(
+                "🗑️ <b>Barcha ma'lumotlarni tozalash</b>\n\n"
+                "Haqiqatan ham barcha topshiriqlar, statistika va o'quvchilar (adminlar bundan mustasno) "
+                "o'chirilishini tasdiqlaysizmi?",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=markup
+            )
+        
+        elif data == 'confirm_clear':
+            try:
+                conn = get_db_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    
+                    # O'quvchilarni deaktiv qilish (adminlardan tashqari)
+                    for admin_id in ADMIN_IDS:
+                        cursor.execute('UPDATE students SET is_active = 0 WHERE user_id != ?', (admin_id,))
+                    
+                    cursor.execute('DELETE FROM submissions')
+                    cursor.execute('DELETE FROM statistics')
+                    cursor.execute('DELETE FROM contest_submissions')
+                    cursor.execute('DELETE FROM contests')
+                    cursor.execute('DELETE FROM assignments')
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    text = "🗑️ <b>Barcha ma'lumotlar tozalandi!</b>\n\nAdmin ma'lumotlari saqlanib qoldi."
+                else:
+                    text = "❌ Tozalashda xatolik!"
+            except Exception as e:
+                logger.error(f"Clear data error: {e}")
+                text = "❌ Xatolik yuz berdi!"
+            
+            safe_edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+            safe_answer_callback_query(call.id, "Amal bajarildi")
+        
+        elif data == 'cancel_clear':
+            safe_edit_message_text(
+                "✅ Tozalash bekor qilindi.",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML'
+            )
+            safe_answer_callback_query(call.id, "Bekor qilindi")
+    
     logger.info("✅ Barcha handlerlar ro'yxatdan o'tdi")
 
 # ==================== BOT ISHGA TUSHIRISH ====================
@@ -1139,28 +1622,72 @@ def start_bot():
     # Bot instance yaratish
     bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
     
+    # Webhook ni tozalash va eski updateslarni o'chirish (409 xatosini hal qilish)
+    try:
+        logger.info("🧹 Webhook va pending updates tozalanmoqda...")
+        bot.remove_webhook()
+        time.sleep(1)
+        # Barcha pending updateslarni skip qilish
+        bot.get_updates(offset=-1)
+        logger.info("✅ Webhook tozalandi")
+    except Exception as e:
+        logger.warning(f"⚠️ Webhook tozalashda xato (normal): {e}")
+    
     # Handlerlarni ro'yxatdan o'tkazish
     register_handlers(bot)
     
     logger.info("✅ Bot tayyor, polling boshlandi...")
     
     # Infinity polling with error recovery
-    while True:
+    retry_count = 0
+    max_retries = 5
+    
+    while retry_count < max_retries:
         try:
             bot.infinity_polling(
                 timeout=30,
                 long_polling_timeout=60,
                 allowed_updates=["message", "callback_query"],
-                skip_pending=True  # Eski xabarlarni skip qilish
+                skip_pending=False,  # Manual skip qildik yuqorida
+                none_stop=True
             )
+            break  # Muvaffaqiyatli bo'lsa tsikldan chiqish
+        except telebot.apihelper.ApiTelegramException as e:
+            if "409" in str(e) or "Conflict" in str(e):
+                logger.error(f"❌ Error 409: Boshqa bot instance ishlayapti!")
+                logger.info("🛑 10 soniya kutilmoqda, keyin qayta uriniladi...")
+                time.sleep(10)
+                retry_count += 1
+                
+                # Webhook ni qayta tozalash
+                try:
+                    bot.remove_webhook()
+                    time.sleep(2)
+                    bot.get_updates(offset=-1)
+                except:
+                    pass
+                
+                if retry_count >= max_retries:
+                    logger.critical("❌ Bot ishga tushmadi: boshqa instance to'xtatilmagan!")
+                    logger.critical("YECHIM: Render.com da barcha eski deploymentlarni to'xtating!")
+                    return False
+            else:
+                raise
         except KeyboardInterrupt:
             logger.info("⏹ Bot to'xtatildi (KeyboardInterrupt)")
             break
         except Exception as e:
             logger.error(f"❌ Polling xato: {e}")
             logger.error(traceback.format_exc())
-            logger.info("🔄 5 soniyadan keyin qayta uriniladi...")
-            time.sleep(5)
+            retry_count += 1
+            
+            if retry_count >= max_retries:
+                logger.critical("❌ Bot maksimal retry limitga yetdi!")
+                return False
+            
+            logger.info(f"🔄 {5 * retry_count} soniyadan keyin qayta uriniladi...")
+            time.sleep(5 * retry_count)
+            
             # Bot instance ni qayta yaratish
             bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
             register_handlers(bot)
