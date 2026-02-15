@@ -1,0 +1,23 @@
+[Unit]
+Description=Homework Bot - Uyga Vazifa Tizimi
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/bot
+ExecStart=/usr/bin/python3 /path/to/bot/main_fixed.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/path/to/bot/bot.log
+StandardError=append:/path/to/bot/bot.log
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Resource limits (ixtiyoriy)
+MemoryLimit=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
