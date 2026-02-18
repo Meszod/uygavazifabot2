@@ -50,7 +50,7 @@ sqlite3.register_converter("TIMESTAMP", convert_datetime)
 sqlite3.register_converter("DATE", convert_date)
 
 # ==================== KONFIGURATSIYA ====================
-BOT_TOKEN = '8523430941:AAGtv-UXLK_qDA-83YpdEMW-WZbPvH-RJU0'
+BOT_TOKEN = '8523430941:AAE3lzJ3aFF2ss6JJ3S5e_ERgAj29DhJ0VM'
 CHANNEL_ID = '-1003543686638'
 
 # Doimiy adminlar (kod ichida - o'zgarmas)
